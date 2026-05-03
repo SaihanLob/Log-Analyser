@@ -25,9 +25,7 @@ try:
 except ImportError:
     EVTX_AVAILABLE = False
 
-# ─────────────────────────────────────────────
-#  Configuration
-# ─────────────────────────────────────────────
+#  CONFIGURATION
 
 BRUTE_FORCE_THRESHOLD = 5       # failed attempts
 BRUTE_FORCE_WINDOW    = 60      # seconds
@@ -70,9 +68,7 @@ LINUX_PRIV_ESC_PATTERNS = [
     r"passwd\s+root",
 ]
 
-# ─────────────────────────────────────────────
-#  Logging Setup
-# ─────────────────────────────────────────────
+#  LOGGING SETUP
 
 def setup_logging(log_file: str) -> logging.Logger:
     logger = logging.getLogger("LogAnalyser")
@@ -89,9 +85,7 @@ def setup_logging(log_file: str) -> logging.Logger:
     logger.addHandler(ch)
     return logger
 
-# ─────────────────────────────────────────────
-#  Finding Data Class
-# ─────────────────────────────────────────────
+#  FINDING DATA CLASS
 
 class Finding:
     def __init__(self, category: str, severity: str, timestamp: str, source: str, description: str, raw: str = ""):
@@ -111,9 +105,9 @@ class Finding:
             "description": self.description,
         }
 
-# ─────────────────────────────────────────────
-#  Windows Event Log Parser
-# ─────────────────────────────────────────────
+
+#  WINDOWS EVENT LOG PARSER
+
 
 def parse_evtx(filepath: str, logger: logging.Logger) -> list:
     if not EVTX_AVAILABLE:
@@ -250,9 +244,8 @@ def _parse_windows_ts(ts_str: str):
     except Exception:
         return None
 
-# ─────────────────────────────────────────────
-#  Linux Syslog Parser
-# ─────────────────────────────────────────────
+#  LINUX SYSLOG PARSER
+
 
 SYSLOG_FAILED_LOGIN_RE = re.compile(
     r"(?P<month>\w+)\s+(?P<day>\d+)\s+(?P<time>\d+:\d+:\d+).*"
@@ -386,9 +379,7 @@ def _extract_syslog_ts(line: str) -> str:
     m = re.match(r"(\w+\s+\d+\s+\d+:\d+:\d+)", line)
     return m.group(1) if m else "Unknown"
 
-# ─────────────────────────────────────────────
-#  HTML Report Generator
-# ─────────────────────────────────────────────
+#  HTML REPORT GENERATOR
 
 SEVERITY_COLOUR = {
     "HIGH":   "#e74c3c",
@@ -510,9 +501,7 @@ def generate_html_report(findings: list, report_file: str, logger: logging.Logge
 
     logger.info(f"HTML report saved to '{report_file}'")
 
-# ─────────────────────────────────────────────
 #  CLI
-# ─────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
