@@ -4,7 +4,6 @@ A cross-platform log analysis tool written in Python. It parses Windows Event Lo
 
 This was built as a blue team and SOC learning project, with the goal of understanding how log-based threat detection works at a practical level before working with full SIEM platforms like Splunk or Wazuh.
 
----
 
 ## Features
 
@@ -17,7 +16,6 @@ This was built as a blue team and SOC learning project, with the goal of underst
 - Accepts multiple log files in a single run
 - Cross-platform support: Windows and Linux
 
----
 
 ## Detection Coverage
 
@@ -33,7 +31,6 @@ On Linux, detects sudo commands, su attempts, chmod operations that set setuid o
 
 Flags known offensive tools and techniques including nmap, netcat, socat, Hydra, Mimikatz, sqlmap, reverse shell patterns, and base64-encoded command execution. On Windows this is pulled from process creation events (Event ID 4688). On Linux it is matched against log lines directly.
 
----
 
 ## Windows Event IDs Monitored
 
@@ -51,7 +48,6 @@ Flags known offensive tools and techniques including nmap, netcat, socat, Hydra,
 | 4732 | User added to local admin group |
 | 7045 | New service installed |
 
----
 
 ## Installation
 
@@ -63,7 +59,6 @@ pip install -r requirements.txt
 
 The only external dependency is `python-evtx`, which is required for parsing Windows Event Logs. If you are only analysing Linux syslogs, the tool will work without it.
 
----
 
 ## Usage
 
@@ -97,7 +92,6 @@ python analyser.py --syslog auth.log syslog messages
 python analyser.py --syslog auth.log --report my_report.html --log-file run.log --threshold 3 --window 30
 ```
 
----
 
 ## Output
 
@@ -116,7 +110,6 @@ Every finding is printed to the terminal and written to the log file with a time
 
 Open the report in any browser. It includes a severity summary, a breakdown of findings by category, and a full sortable table of every event with its timestamp, severity badge, category, description, and source file.
 
----
 
 ## Options Reference
 
@@ -129,13 +122,11 @@ Open the report in any browser. It includes a severity summary, a breakdown of f
 | `--threshold` | Failed login count to trigger brute force alert | `5` |
 | `--window` | Time window in seconds for brute force detection | `60` |
 
----
 
 ## Real-World Use Cases
 
 Log analysis is one of the most fundamental skills in SOC work. Practical applications of this tool include investigating failed SSH login patterns on a Linux server, reviewing Windows Security logs after a suspected intrusion, triaging auth.log files pulled from a compromised machine during an incident response engagement, and building familiarity with the Event IDs that underpin most SIEM detection rules.
 
----
 
 ## Project Structure
 
@@ -147,19 +138,15 @@ log-analyser/
 └── report.html          # Generated at runtime (gitignored)
 ```
 
----
 
 ## Security Notes
 
 Log files often contain sensitive information including usernames, IP addresses, and internal hostnames. Never commit real log files to a public repository. The `.gitignore` excludes `.log` and `.evtx` files by default for this reason. If you are sharing sample logs for demonstration purposes, sanitise them first.
 
----
 
 ## Skills Demonstrated
 
 `Python` · `Log Parsing` · `Regex` · `Brute Force Detection` · `Windows Event Log Analysis` · `Linux Syslog Analysis` · `HTML Report Generation` · `Blue Team / Defensive Security` · `SOC Tooling`
-
----
 
 ## Licence
 
