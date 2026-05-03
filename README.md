@@ -52,7 +52,7 @@ Flags known offensive tools and techniques including nmap, netcat, socat, Hydra,
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/log-analyser.git
+git clone https://github.com/SaihanLob/log-analyser.git
 cd log-analyser
 pip install -r requirements.txt
 ```
