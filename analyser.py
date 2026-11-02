@@ -13,6 +13,7 @@ import json
 import logging
 import argparse
 import platform
+from html import escape as esc
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
@@ -401,11 +402,11 @@ def generate_html_report(findings: list, report_file: str, logger: logging.Logge
         colour = SEVERITY_COLOUR.get(f.severity, "#95a5a6")
         rows += f"""
         <tr>
-            <td>{f.timestamp}</td>
-            <td><span class="badge" style="background:{colour}">{f.severity}</span></td>
-            <td>{f.category}</td>
-            <td>{f.description}</td>
-            <td class="source">{os.path.basename(f.source)}</td>
+            <td>{esc(f.timestamp)}</td>
+            <td><span class="badge" style="background:{colour}">{esc(f.severity)}</span></td>
+            <td>{esc(f.category)}</td>
+            <td>{esc(f.description)}</td>
+            <td class="source">{esc(os.path.basename(f.source))}</td>
         </tr>"""
 
     category_cards = ""
@@ -415,7 +416,7 @@ def generate_html_report(findings: list, report_file: str, logger: logging.Logge
         l = sum(1 for i in items if i.severity == "LOW")
         category_cards += f"""
         <div class="card">
-            <div class="card-title">{cat}</div>
+            <div class="card-title">{esc(cat)}</div>
             <div class="card-count">{len(items)}</div>
             <div class="card-breakdown">
                 <span style="color:{SEVERITY_COLOUR['HIGH']}">High: {h}</span> &nbsp;
@@ -456,7 +457,7 @@ def generate_html_report(findings: list, report_file: str, logger: logging.Logge
 </head>
 <body>
     <h1>Log Analyser Report</h1>
-    <div class="meta">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} &nbsp;|&nbsp; Host: {platform.node()}</div>
+    <div class="meta">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} &nbsp;|&nbsp; Host: {esc(platform.node())}</div>
 
     <div class="summary">
         <div class="summary-box">
