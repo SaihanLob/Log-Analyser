@@ -1,5 +1,7 @@
 # Log Analyser
 
+[![Tests](https://github.com/SaihanLob/Log-Analyser/actions/workflows/tests.yml/badge.svg)](https://github.com/SaihanLob/Log-Analyser/actions/workflows/tests.yml)
+
 A cross-platform log analysis tool written in Python. It parses Windows Event Logs and Linux syslogs, identifies suspicious activity across three detection categories, and produces both a timestamped log file and an HTML report summarising every finding by severity.
 
 This was built as a blue team and SOC learning project, with the goal of understanding how log-based threat detection works at a practical level before working with full SIEM platforms like Splunk or Wazuh.
@@ -52,12 +54,23 @@ Flags reverse shell patterns (such as bash `/dev/tcp` redirection and `nc -e`), 
 ## Installation
 
 ```bash
-git clone https://github.com/SaihanLob/log-analyser.git
-cd log-analyser
+git clone https://github.com/SaihanLob/Log-Analyser.git
+cd Log-Analyser
 pip install -r requirements.txt
 ```
 
 The only external dependency is `python-evtx`, which is required for parsing Windows Event Logs. If you are only analysing Linux syslogs, the tool will work without it.
+
+
+## Try It on the Sample Log
+
+`samples/sample_auth.log` is a simulated day on a Linux web server containing normal admin activity, a slow low-volume login attempt, and a full intrusion: password spraying and brute force against SSH, a successful login, a malicious download, a setuid binary, a backdoor account added to the sudo group, and a reverse shell. All IP addresses are from ranges reserved for documentation.
+
+```bash
+python analyser.py --syslog samples/sample_auth.log
+```
+
+![HTML report generated from the sample log](docs/report-screenshot.png)
 
 
 ## Usage
@@ -108,7 +121,7 @@ Every finding is printed to the terminal and written to the log file with a time
 
 ### HTML Report (`report.html`)
 
-Open the report in any browser. It includes a severity summary, a breakdown of findings by category, and a full sortable table of every event with its timestamp, severity badge, category, description, and source file.
+Open the report in any browser. It includes a severity summary, a breakdown of findings by category, and a full table of every finding, ordered by severity, with its timestamp, severity badge, category, description, and source file.
 
 
 ## Options Reference
@@ -131,12 +144,30 @@ Log analysis is one of the most fundamental skills in SOC work. Practical applic
 ## Project Structure
 
 ```
-log-analyser/
-├── analyser.py          # Main script
-├── requirements.txt     # Python dependencies
-├── analyser.log         # Generated at runtime (gitignored)
-└── report.html          # Generated at runtime (gitignored)
+Log-Analyser/
+├── analyser.py              # Main script
+├── requirements.txt         # Python dependencies
+├── samples/
+│   └── sample_auth.log      # Simulated intrusion for testing and demos
+├── tests/
+│   └── test_analyser.py     # Automated tests (pytest)
+├── docs/
+│   └── report-screenshot.png
+├── .github/workflows/
+│   └── tests.yml            # Runs the tests on every push (GitHub Actions)
+├── analyser.log             # Generated at runtime (gitignored)
+└── report.html              # Generated at runtime (gitignored)
 ```
+
+
+## Running the Tests
+
+```bash
+pip install pytest
+python -m pytest
+```
+
+The tests check every detection against the sample log, including cases that must not be flagged, and confirm that log content is escaped in the HTML report. They run automatically on Linux and Windows for every push and pull request.
 
 
 ## Security Notes
