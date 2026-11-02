@@ -14,14 +14,15 @@ import logging
 import argparse
 import platform
 from html import escape as esc
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from collections import defaultdict
 from pathlib import Path
 
-# Optional: Windows Event Log parsing
+import xml.etree.ElementTree as ET
+
+# Optional: reading .evtx files needs python-evtx
 try:
     import Evtx.Evtx as evtx
-    import xml.etree.ElementTree as ET
     EVTX_AVAILABLE = True
 except ImportError:
     EVTX_AVAILABLE = False
@@ -35,6 +36,7 @@ DEFAULT_REPORT_FILE   = "report.html"
 
 # Windows Event IDs of interest
 WINDOWS_EVENT_IDS = {
+    4624: "Successful Login",
     4625: "Failed Login",
     4648: "Explicit Credential Login",
     4672: "Privilege Assigned",
@@ -161,6 +163,29 @@ class Finding:
 
 #  WINDOWS EVENT LOG PARSER
 
+EVTX_NS = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+
+# Built-in and machine accounts that receive special privileges on every logon.
+SYSTEM_ACCOUNTS = {"system", "local service", "network service", "anonymous logon", "-", ""}
+
+# Logon types that come from another machine: 3 = network (SMB, etc.), 10 = RDP.
+REMOTE_LOGON_TYPES = {"3", "10"}
+
+# Groups that grant administrative or remote access. Additions to any other group
+# (such as "Users", which every new account joins) are only LOW.
+PRIVILEGED_GROUPS = {
+    "administrators", "domain admins", "enterprise admins", "schema admins",
+    "account operators", "backup operators", "server operators", "print operators",
+    "remote desktop users", "remote management users", "hyper-v administrators",
+    "dnsadmins", "group policy creator owners",
+}
+
+
+def _is_system_account(name: str) -> bool:
+    name = (name or "").lower()
+    return (name in SYSTEM_ACCOUNTS or name.endswith("$")
+            or name.startswith("dwm-") or name.startswith("umfd-"))
+
 
 def parse_evtx(filepath: str, logger: logging.Logger,
                threshold: int = BRUTE_FORCE_THRESHOLD,
@@ -169,136 +194,214 @@ def parse_evtx(filepath: str, logger: logging.Logger,
         logger.error("python-evtx is not installed. Run: pip install python-evtx")
         return []
 
-    findings = []
-    failed_logins = defaultdict(list)   # ip/user -> [timestamps]
-
     logger.info(f"Parsing Windows Event Log: {filepath}")
 
     try:
         with evtx.Evtx(filepath) as log:
+            # Read every record first so a corrupt file fails cleanly here,
+            # before any analysis is done.
+            xml_records = []
             for record in log.records():
                 try:
-                    xml_str = record.xml()
-                    root    = ET.fromstring(xml_str)
-                    ns      = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
-
-                    event_id_el = root.find(".//e:EventID", ns)
-                    time_el     = root.find(".//e:TimeCreated", ns)
-
-                    if event_id_el is None:
-                        continue
-
-                    event_id  = int(event_id_el.text)
-                    timestamp = time_el.attrib.get("SystemTime", "Unknown") if time_el is not None else "Unknown"
-
-                    if event_id not in WINDOWS_EVENT_IDS:
-                        continue
-
-                    # Extract useful data fields
-                    data = {}
-                    for el in root.findall(".//e:Data", ns):
-                        name = el.attrib.get("Name", "")
-                        if name:
-                            data[name] = el.text or ""
-
-                    label = WINDOWS_EVENT_IDS[event_id]
-
-                    # Failed login / brute force
-                    if event_id == 4625:
-                        user   = data.get("TargetUserName", "Unknown")
-                        ip     = data.get("IpAddress", "Unknown")
-                        key    = f"{user}@{ip}"
-                        ts_obj = _parse_windows_ts(timestamp)
-                        failed_logins[key].append(ts_obj)
-
-                        findings.append(Finding(
-                            category    = "Failed Login",
-                            severity    = "MEDIUM",
-                            timestamp   = timestamp,
-                            source      = filepath,
-                            description = f"Failed login for user '{user}' from {ip}",
-                            raw         = xml_str
-                        ))
-
-                    # Privilege escalation
-                    elif event_id in (4672, 4673, 4728, 4732, 4756):
-                        user = data.get("SubjectUserName", data.get("MemberName", "Unknown"))
-                        findings.append(Finding(
-                            category    = "Privilege Escalation",
-                            severity    = "HIGH",
-                            timestamp   = timestamp,
-                            source      = filepath,
-                            description = f"{label}: user '{user}'",
-                            raw         = xml_str
-                        ))
-
-                    # Suspicious process
-                    elif event_id == 4688:
-                        process = data.get("NewProcessName", "Unknown")
-                        cmdline = data.get("CommandLine", "")
-                        hit = match_suspicious(f"{process} {cmdline}")
-                        if hit:
-                            severity, why = hit
-                            findings.append(Finding(
-                                category    = "Suspicious Process",
-                                severity    = severity,
-                                timestamp   = timestamp,
-                                source      = filepath,
-                                description = f"{why}: {process} {cmdline}".strip(),
-                                raw         = xml_str
-                            ))
-                        else:
-                            findings.append(Finding(
-                                category    = "Process Creation",
-                                severity    = "LOW",
-                                timestamp   = timestamp,
-                                source      = filepath,
-                                description = f"New process: {process}",
-                                raw         = xml_str
-                            ))
-
-                    # Misc high-interest events
-                    elif event_id in (4697, 4719, 4720, 4745, 7045):
-                        findings.append(Finding(
-                            category    = "Privilege Escalation",
-                            severity    = "HIGH",
-                            timestamp   = timestamp,
-                            source      = filepath,
-                            description = f"{label} detected (Event ID {event_id})",
-                            raw         = xml_str
-                        ))
-
+                    xml_records.append(record.xml())
                 except Exception:
                     continue
-
     except Exception as e:
         logger.error(f"Failed to parse {filepath}: {e}")
-        return findings
+        return []
 
-    # Brute force detection
-    for key, timestamps in failed_logins.items():
-        timestamps.sort()
-        for i in range(len(timestamps)):
-            in_window = [t for t in timestamps[i:] if t and timestamps[i] and (t - timestamps[i]).total_seconds() <= window]
-            if len(in_window) >= threshold:
-                user, ip = key.rsplit("@", 1)
-                findings.append(Finding(
-                    category    = "Brute Force",
-                    severity    = "HIGH",
-                    timestamp   = str(timestamps[i]),
-                    source      = filepath,
-                    description = f"Brute force detected: {len(in_window)} failed logins for '{user}' from {ip} within {window}s",
-                ))
-                break
+    return analyse_windows_events(xml_records, filepath, logger, threshold, window)
 
+
+def _parse_event_xml(xml_str: str):
+    """Return (event_id, timestamp, data fields) for one event, or None if unusable."""
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        return None
+
+    event_id_el = root.find(".//e:EventID", EVTX_NS)
+    if event_id_el is None or not (event_id_el.text or "").strip().isdigit():
+        return None
+
+    time_el   = root.find(".//e:TimeCreated", EVTX_NS)
+    timestamp = time_el.attrib.get("SystemTime", "Unknown") if time_el is not None else "Unknown"
+
+    data = {}
+    for el in root.findall(".//e:Data", EVTX_NS):
+        name = el.attrib.get("Name", "")
+        if name:
+            data[name] = el.text or ""
+
+    return int(event_id_el.text), timestamp, data
+
+
+def analyse_windows_events(xml_records, source: str, logger: logging.Logger,
+                           threshold: int = BRUTE_FORCE_THRESHOLD,
+                           window: int = BRUTE_FORCE_WINDOW) -> list:
+    """Analyse Windows events given as XML strings. Kept separate from file
+    reading so it can be tested with hand-written XML instead of .evtx files."""
+    findings        = []
+    failed_logins   = defaultdict(list)   # source -> [(datetime, user, timestamp string)]
+    accepted_logins = []                  # [(datetime, user, source, timestamp string)]
+    processes_seen  = 0
+
+    for xml_str in xml_records:
+        parsed = _parse_event_xml(xml_str)
+        if not parsed:
+            continue
+        event_id, timestamp, data = parsed
+        if event_id not in WINDOWS_EVENT_IDS:
+            continue
+
+        def add(category, severity, description):
+            findings.append(Finding(category, severity, timestamp, source, description, xml_str))
+
+        # Failed and successful logins, used for brute force detection.
+        # IpAddress is "-" for local logons, so those are grouped together as "local".
+        if event_id in (4624, 4625):
+            user  = data.get("TargetUserName", "Unknown")
+            ip    = data.get("IpAddress", "-")
+            where = ip if ip not in ("-", "", "::1", "127.0.0.1") else "local"
+            dt    = _parse_windows_ts(timestamp)
+
+            if event_id == 4625:
+                if dt:
+                    failed_logins[where].append((dt, user, timestamp))
+                add("Failed Login", "MEDIUM", f"Failed login for user '{user}' from {where}")
+            elif dt and data.get("LogonType") in REMOTE_LOGON_TYPES and not _is_system_account(user):
+                accepted_logins.append((dt, user, where, timestamp))
+
+        # Special privileges on logon. This fires for every administrator and
+        # service logon, so it is LOW and ignored for built-in accounts.
+        elif event_id in (4672, 4673):
+            user = data.get("SubjectUserName", "Unknown")
+            if not _is_system_account(user):
+                add("Privileged Logon", "LOW", f"{WINDOWS_EVENT_IDS[event_id]}: user '{user}'")
+
+        elif event_id == 4648:
+            user   = data.get("SubjectUserName", "Unknown")
+            target = data.get("TargetUserName", "Unknown")
+            server = data.get("TargetServerName", "")
+            if not _is_system_account(user):
+                add("Explicit Credentials", "LOW",
+                    f"'{user}' used the credentials of '{target}'" + (f" on {server}" if server else ""))
+
+        # Group membership changes: report who was added, to which group, and by whom
+        elif event_id in (4728, 4732, 4756):
+            member = data.get("MemberName", "-")
+            if member in ("-", ""):
+                member = data.get("MemberSid", "Unknown")
+            group = data.get("TargetUserName", "Unknown")
+            actor = data.get("SubjectUserName", "Unknown")
+            if group.lower() in PRIVILEGED_GROUPS:
+                add("Privilege Escalation", "HIGH", f"{member} added to privileged group '{group}' by '{actor}'")
+            else:
+                add("Group Membership", "LOW", f"{member} added to group '{group}' by '{actor}'")
+
+        elif event_id == 4720:
+            add("Account Created", "HIGH",
+                f"New user account created: {data.get('TargetUserName', 'Unknown')} "
+                f"(by '{data.get('SubjectUserName', 'Unknown')}')")
+
+        elif event_id in (4697, 7045):
+            name  = data.get("ServiceName", "Unknown")
+            image = data.get("ServiceFileName") or data.get("ImagePath") or ""
+            hit   = match_suspicious(image)
+            extra = f" ({hit[1]})" if hit else ""
+            add("Service Installed", "HIGH", f"New service '{name}': {image}{extra}".strip())
+
+        elif event_id == 4719:
+            add("Audit Policy Changed", "HIGH",
+                f"Audit policy changed by '{data.get('SubjectUserName', 'Unknown')}' "
+                "(attackers do this to stop their actions being logged)")
+
+        # Process creation: only suspicious processes are reported. Every program
+        # that starts creates one of these, so reporting all of them floods the report.
+        elif event_id == 4688:
+            processes_seen += 1
+            process = data.get("NewProcessName", "Unknown")
+            cmdline = data.get("CommandLine", "")
+            hit = match_suspicious(f"{process} {cmdline}")
+            if hit:
+                severity, why = hit
+                add("Suspicious Process", severity, f"{why}: {cmdline or process}")
+
+    if processes_seen:
+        logger.info(f"Checked {processes_seen} process creation events in {source}")
+
+    findings.extend(_detect_brute_force(failed_logins, accepted_logins, threshold, window, source))
     return findings
 
 
 def _parse_windows_ts(ts_str: str):
+    """Parse a Windows event timestamp into a naive UTC datetime.
+
+    Windows records 7 fractional digits (100-nanosecond precision), which
+    datetime.fromisoformat() rejects before Python 3.11, so the fraction is
+    trimmed to 6 digits first.
+    """
     try:
-        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except Exception:
+        ts = re.sub(r"(\.\d{6})\d+", r"\1", ts_str.strip()).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, AttributeError):
         return None
+
+
+#  BRUTE FORCE DETECTION (shared by the Linux and Windows parsers)
+
+def _detect_brute_force(failed_logins: dict, accepted_logins: list,
+                        threshold: int, window: int, source: str) -> list:
+    """Find brute force attacks and successful logins that follow them.
+
+    failed_logins:   {source IP: [(datetime, user, timestamp string), ...]}
+    accepted_logins: [(datetime, user, source IP, timestamp string), ...]
+
+    Failures are grouped by source IP rather than by user, so an attacker who
+    tries many different usernames (password spraying) is still caught.
+    A sliding window finds the busiest `window`-second period for each IP.
+    """
+    findings = []
+    brute_force_ips = {}   # IP -> datetime the brute force began
+
+    for ip, attempts in failed_logins.items():
+        attempts.sort(key=lambda a: a[0])
+        start = best_start = best_count = 0
+        for end in range(len(attempts)):
+            while (attempts[end][0] - attempts[start][0]).total_seconds() > window:
+                start += 1
+            if end - start + 1 > best_count:
+                best_start, best_count = start, end - start + 1
+
+        if best_count >= threshold:
+            burst = attempts[best_start:best_start + best_count]
+            brute_force_ips[ip] = burst[0][0]
+            users = sorted({user for _, user, _ in burst})
+            user_list = ", ".join(users[:5]) + (f" and {len(users) - 5} more" if len(users) > 5 else "")
+            findings.append(Finding(
+                category    = "Brute Force",
+                severity    = "HIGH",
+                timestamp   = burst[0][2],
+                source      = source,
+                description = f"Brute force detected: {best_count} failed logins from {ip} within {window}s (users tried: {user_list})",
+            ))
+
+    # A successful login from an IP that was brute forcing suggests the attack worked
+    for dt, user, ip, timestamp in accepted_logins:
+        if ip in brute_force_ips and dt >= brute_force_ips[ip]:
+            findings.append(Finding(
+                category    = "Possible Compromise",
+                severity    = "HIGH",
+                timestamp   = timestamp,
+                source      = source,
+                description = f"Successful login for '{user}' from {ip} after a brute force from the same IP",
+            ))
+
+    return findings
+
 
 #  LINUX SYSLOG PARSER
 
@@ -438,45 +541,7 @@ def parse_syslog(filepath: str, logger: logging.Logger,
     except PermissionError:
         logger.error(f"Permission denied reading: {filepath}")
 
-    # Brute force detection.
-    # Failures are grouped by source IP rather than by user, so an attacker who
-    # tries many different usernames (password spraying) is still caught.
-    # A sliding window finds the busiest `window`-second period for each IP.
-    brute_force_ips = {}   # IP -> datetime the brute force began
-    for ip, attempts in failed_logins.items():
-        attempts.sort(key=lambda a: a[0])
-        start = best_start = best_count = 0
-        for end in range(len(attempts)):
-            while (attempts[end][0] - attempts[start][0]).total_seconds() > window:
-                start += 1
-            if end - start + 1 > best_count:
-                best_start, best_count = start, end - start + 1
-
-        if best_count >= threshold:
-            burst = attempts[best_start:best_start + best_count]
-            began = burst[0][0]
-            brute_force_ips[ip] = began
-            users = sorted({user for _, user, _ in burst})
-            user_list = ", ".join(users[:5]) + (f" and {len(users) - 5} more" if len(users) > 5 else "")
-            findings.append(Finding(
-                category    = "Brute Force",
-                severity    = "HIGH",
-                timestamp   = burst[0][2],
-                source      = filepath,
-                description = f"Brute force detected: {best_count} failed logins from {ip} within {window}s (users tried: {user_list})",
-            ))
-
-    # A successful login from an IP that was brute forcing suggests the attack worked
-    for dt, user, ip, timestamp in accepted_logins:
-        if ip in brute_force_ips and dt >= brute_force_ips[ip]:
-            findings.append(Finding(
-                category    = "Possible Compromise",
-                severity    = "HIGH",
-                timestamp   = timestamp,
-                source      = filepath,
-                description = f"Successful login for '{user}' from {ip} after a brute force from the same IP",
-            ))
-
+    findings.extend(_detect_brute_force(failed_logins, accepted_logins, threshold, window, filepath))
     return findings
 
 

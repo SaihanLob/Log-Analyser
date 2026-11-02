@@ -36,19 +36,21 @@ Flags reverse shell patterns (such as bash `/dev/tcp` redirection and `nc -e`), 
 
 ## Windows Event IDs Monitored
 
-| Event ID | Description |
-|----------|-------------|
-| 4625 | Failed login |
-| 4648 | Explicit credential login |
-| 4672 | Special privileges assigned |
-| 4673 | Privileged service called |
-| 4688 | New process created |
-| 4697 | Service installed |
-| 4719 | Audit policy changed |
-| 4720 | User account created |
-| 4728 | User added to privileged group |
-| 4732 | User added to local admin group |
-| 7045 | New service installed |
+| Event ID | Description | How it is used |
+|----------|-------------|----------------|
+| 4624 | Successful login | Not reported on its own. A remote login (network or RDP) from an IP that was brute forcing raises a High Possible Compromise finding |
+| 4625 | Failed login | Medium, and counted per source IP for brute force detection |
+| 4648 | Explicit credential login | Low, ignoring built-in and machine accounts |
+| 4672 | Special privileges assigned | Low, ignoring built-in and machine accounts, since it fires on every administrator logon |
+| 4673 | Privileged service called | Low, ignoring built-in and machine accounts |
+| 4688 | New process created | Reported only when the process or command line is suspicious; every program start creates one of these |
+| 4697 | Service installed | High, with the service binary checked for suspicious tools |
+| 4719 | Audit policy changed | High, since attackers change audit policy to stop their actions being logged |
+| 4720 | User account created | High |
+| 4728, 4732, 4756 | User added to a security group | High for privileged groups such as Administrators, Domain Admins and Remote Desktop Users; Low for ordinary groups such as Users |
+| 7045 | New service installed | High, with the service binary checked for suspicious tools |
+
+Brute force detection uses the same sliding window and grouping by source IP as the Linux parser.
 
 
 ## Installation
