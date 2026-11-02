@@ -49,25 +49,77 @@ WINDOWS_EVENT_IDS = {
     7045: "New Service Installed",
 }
 
-# Linux suspicious process names
-SUSPICIOUS_PROCESSES = [
-    "nmap", "netcat", "nc", "socat", "metasploit", "msfconsole",
-    "mimikatz", "hydra", "medusa", "john", "hashcat", "sqlmap",
-    "wireshark", "tcpdump", "aircrack", "nikto", "dirb", "gobuster",
-    "wget", "curl", "python -c", "bash -i", "sh -i", "perl -e",
-    "ruby -e", "php -r", "powershell", "base64"
+# Suspicious commands, checked against the command being run rather than the whole
+# log line, so usernames and ordinary words do not trigger alerts.
+
+# Patterns that are suspicious wherever they appear in a command (HIGH).
+SUSPICIOUS_INDICATORS = [
+    (r"/dev/(?:tcp|udp)/",                          "Reverse shell (bash /dev/tcp redirection)"),
+    (r"(?:^|\s)(?:ba)?sh\s+-i\b",                   "Interactive shell spawned (common in reverse shells)"),
+    (r"\b(?:nc|ncat|netcat)\b.*\s-[ce]\s",          "Netcat executing a program (common in reverse shells)"),
+    (r"https?://\d{1,3}(?:\.\d{1,3}){3}",           "Download from a bare IP address"),
+    (r"\bbase64\s+(?:-d|--decode)\b",               "Base64-decoded payload"),
 ]
 
-# Linux privilege escalation patterns
-LINUX_PRIV_ESC_PATTERNS = [
-    r"sudo\s+.*",
-    r"su\s+-?\s*\w*",
-    r"chmod\s+[0-7]*[2367][0-7]{2}\s+",   # setuid/setgid bits
-    r"chown\s+root",
-    r"visudo",
-    r"usermod\s+.*-G\s+sudo",
-    r"passwd\s+root",
+# Offensive security tools. Matched as whole program names, so "nc" matches
+# "/usr/bin/nc -lvp 4444" but not "sync", and "john" does not match /home/john/.
+OFFENSIVE_TOOLS = [
+    "nmap", "netcat", "nc", "ncat", "socat", "metasploit", "msfconsole", "msfvenom",
+    "mimikatz", "hydra", "medusa", "john", "hashcat", "sqlmap",
+    "aircrack", "aircrack-ng", "nikto", "dirb", "gobuster", "linpeas",
 ]
+
+# Legitimate tools that attackers also use. Worth a look, but common in normal admin work (MEDIUM).
+DUAL_USE_TOOLS = [
+    "wget", "curl", "tcpdump", "tshark", "wireshark", "powershell",
+    "python -c", "python3 -c", "perl -e", "ruby -e", "php -r", "base64",
+]
+
+# Linux privilege escalation command patterns (HIGH).
+LINUX_PRIV_ESC_PATTERNS = [
+    (r"\bchmod\s+(?:-\S+\s+)*(?:[2-7][0-7]{3}|[ugoa]*[+=][rwxXt]*s)\b",              "Setuid/setgid bit set"),
+    (r"\bchown\s+(?:-\S+\s+)*root\b",                                               "File ownership changed to root"),
+    (r"\bvisudo\b|/etc/sudoers",                                                    "sudoers configuration modified"),
+    (r"\b(?:usermod\s.*-a?G\s*\S*|gpasswd\s+-a\s+\S+\s+|adduser\s+\S+\s+)\b(?:sudo|wheel|admin)\b",
+                                                                                    "User added to an admin group"),
+    (r"\bpasswd\s+root\b",                                                          "root password changed"),
+]
+
+
+def _tool_regex(name: str) -> re.Pattern:
+    """Match a program name only as a whole word, e.g. at the start of a command,
+    after a space or path separator, and followed by a space, quote or '.exe'."""
+    return re.compile(
+        r"(?:^|(?<=[\s/\\'\"(;|&`=]))" + re.escape(name) + r"(?=$|\.exe\b|[\s'\");|&`])",
+        re.IGNORECASE,
+    )
+
+_INDICATOR_RES    = [(re.compile(p, re.IGNORECASE), why) for p, why in SUSPICIOUS_INDICATORS]
+_OFFENSIVE_RES    = [(_tool_regex(t), t) for t in OFFENSIVE_TOOLS]
+_DUAL_USE_RES     = [(_tool_regex(t), t) for t in DUAL_USE_TOOLS]
+_LINUX_PRIV_RES   = [(re.compile(p, re.IGNORECASE), why) for p, why in LINUX_PRIV_ESC_PATTERNS]
+
+
+def match_suspicious(command: str):
+    """Return (severity, reason) for the most serious match in a command, or None."""
+    for rx, why in _INDICATOR_RES:
+        if rx.search(command):
+            return "HIGH", why
+    for rx, tool in _OFFENSIVE_RES:
+        if rx.search(command):
+            return "HIGH", f"Offensive tool '{tool}'"
+    for rx, tool in _DUAL_USE_RES:
+        if rx.search(command):
+            return "MEDIUM", f"Dual-use tool '{tool}'"
+    return None
+
+
+def match_priv_esc(command: str):
+    """Return the reason if a command matches a privilege escalation pattern, or None."""
+    for rx, why in _LINUX_PRIV_RES:
+        if rx.search(command):
+            return why
+    return None
 
 #  LOGGING SETUP
 
@@ -184,14 +236,15 @@ def parse_evtx(filepath: str, logger: logging.Logger,
                     elif event_id == 4688:
                         process = data.get("NewProcessName", "Unknown")
                         cmdline = data.get("CommandLine", "")
-                        proc_lower = (process + " " + cmdline).lower()
-                        if any(sp in proc_lower for sp in SUSPICIOUS_PROCESSES):
+                        hit = match_suspicious(f"{process} {cmdline}")
+                        if hit:
+                            severity, why = hit
                             findings.append(Finding(
                                 category    = "Suspicious Process",
-                                severity    = "HIGH",
+                                severity    = severity,
                                 timestamp   = timestamp,
                                 source      = filepath,
-                                description = f"Suspicious process launched: {process} {cmdline}".strip(),
+                                description = f"{why}: {process} {cmdline}".strip(),
                                 raw         = xml_str
                             ))
                         else:
@@ -265,10 +318,20 @@ SYSLOG_ACCEPTED_LOGIN_RE = re.compile(
 )
 
 SYSLOG_SUDO_RE = re.compile(
-    r"(?P<month>\w+)\s+(?P<day>\d+)\s+(?P<time>\d+:\d+:\d+).*"
-    r"sudo.*COMMAND=(?P<cmd>.+)",
+    r"sudo(?:\[\d+\])?:\s+(?P<user>\S+)\s*:.*COMMAND=(?P<cmd>.+)",
     re.IGNORECASE
 )
+
+SYSLOG_NEW_USER_RE = re.compile(
+    r"(?:useradd|adduser)(?:\[\d+\])?:\s+new user: name=(?P<user>[^,\s]+)",
+    re.IGNORECASE
+)
+
+# Standard syslog header: "Nov  1 07:15:00 hostname program[pid]: message"
+SYSLOG_HEADER_RE = re.compile(r"^\w+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+[^:]+:\s*")
+
+# Cron job lines: "CRON[123]: (user) CMD (command)"
+SYSLOG_CRON_CMD_RE = re.compile(r"CMD\s+\((?P<cmd>.*)\)\s*$")
 
 SYSLOG_SU_RE = re.compile(
     r"(?P<month>\w+)\s+(?P<day>\d+)\s+(?P<time>\d+:\d+:\d+).*"
@@ -321,18 +384,34 @@ def parse_syslog(filepath: str, logger: logging.Logger,
                         accepted_logins.append((dt, m.group("user"), m.group("ip"), timestamp))
                     continue
 
-                # Sudo usage
-                m = SYSLOG_SUDO_RE.search(line)
+                # New local account (logged by useradd/adduser whoever ran it)
+                m = SYSLOG_NEW_USER_RE.search(line)
                 if m:
-                    cmd = m.group("cmd").strip()
                     findings.append(Finding(
-                        category    = "Privilege Escalation",
-                        severity    = "MEDIUM",
+                        category    = "Account Created",
+                        severity    = "HIGH",
                         timestamp   = timestamp,
                         source      = filepath,
-                        description = f"sudo command executed: {cmd}",
+                        description = f"New user account created: {m.group('user')}",
                         raw         = line
                     ))
+                    continue
+
+                # Sudo usage. Using sudo is routine admin work, so it is LOW on its own.
+                # The command itself is then inspected below like any other command,
+                # so a dangerous command run through sudo still raises a HIGH finding.
+                m = SYSLOG_SUDO_RE.search(line)
+                if m:
+                    command = m.group("cmd").strip()
+                    findings.append(Finding(
+                        category    = "Sudo Usage",
+                        severity    = "LOW",
+                        timestamp   = timestamp,
+                        source      = filepath,
+                        description = f"sudo command executed by {m.group('user')}: {command}",
+                        raw         = line
+                    ))
+                    _inspect_command(command, timestamp, filepath, line, findings)
                     continue
 
                 # su usage
@@ -350,32 +429,9 @@ def parse_syslog(filepath: str, logger: logging.Logger,
                     ))
                     continue
 
-                # Privilege escalation patterns
-                for pattern in LINUX_PRIV_ESC_PATTERNS:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        findings.append(Finding(
-                            category    = "Privilege Escalation",
-                            severity    = "HIGH",
-                            timestamp   = timestamp,
-                            source      = filepath,
-                            description = f"Potential privilege escalation: {line[:120]}",
-                            raw         = line
-                        ))
-                        break
-
-                # Suspicious processes
-                line_lower = line.lower()
-                for sp in SUSPICIOUS_PROCESSES:
-                    if sp in line_lower:
-                        findings.append(Finding(
-                            category    = "Suspicious Process",
-                            severity    = "HIGH",
-                            timestamp   = timestamp,
-                            source      = filepath,
-                            description = f"Suspicious process/command detected: {line[:120]}",
-                            raw         = line
-                        ))
-                        break
+                # Any other line: inspect the command (for cron jobs) or the message
+                # text, never the header, so hostnames and usernames are not matched.
+                _inspect_command(_extract_command(line), timestamp, filepath, line, findings)
 
     except FileNotFoundError:
         logger.error(f"File not found: {filepath}")
@@ -422,6 +478,41 @@ def parse_syslog(filepath: str, logger: logging.Logger,
             ))
 
     return findings
+
+
+def _extract_command(line: str) -> str:
+    """Return the part of a syslog line worth inspecting: the command for cron
+    jobs, otherwise the message with the timestamp, host and program removed."""
+    m = SYSLOG_CRON_CMD_RE.search(line)
+    if m:
+        return m.group("cmd")
+    return SYSLOG_HEADER_RE.sub("", line, count=1)
+
+
+def _inspect_command(command: str, timestamp: str, source: str, raw: str, findings: list):
+    """Check a command for privilege escalation and suspicious tools, adding findings."""
+    why = match_priv_esc(command)
+    if why:
+        findings.append(Finding(
+            category    = "Privilege Escalation",
+            severity    = "HIGH",
+            timestamp   = timestamp,
+            source      = source,
+            description = f"{why}: {command[:150]}",
+            raw         = raw
+        ))
+
+    hit = match_suspicious(command)
+    if hit:
+        severity, why = hit
+        findings.append(Finding(
+            category    = "Suspicious Process",
+            severity    = severity,
+            timestamp   = timestamp,
+            source      = source,
+            description = f"{why}: {command[:150]}",
+            raw         = raw
+        ))
 
 
 def _extract_syslog_ts(line: str) -> str:

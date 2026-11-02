@@ -25,11 +25,11 @@ Flags every failed authentication attempt and groups them by source IP, so an at
 
 **Privilege Escalation**
 
-On Linux, detects sudo commands, su attempts, chmod operations that set setuid or setgid bits, chown to root, and modifications to sudoers. On Windows, watches for Event IDs covering privilege assignment, users being added to administrative groups, new services being installed, and audit policy changes.
+On Linux, detects su attempts, chmod operations that set setuid or setgid bits, chown to root, modifications to sudoers, users being added to the sudo, wheel or admin groups, and new local accounts being created. Every sudo command is recorded at Low severity, since sudo is routine admin work, but the command itself is then inspected, so a dangerous command run through sudo still raises a High finding. On Windows, watches for Event IDs covering privilege assignment, users being added to administrative groups, new services being installed, and audit policy changes.
 
 **Suspicious Processes**
 
-Flags known offensive tools and techniques including nmap, netcat, socat, Hydra, Mimikatz, sqlmap, reverse shell patterns, and base64-encoded command execution. On Windows this is pulled from process creation events (Event ID 4688). On Linux it is matched against log lines directly.
+Flags reverse shell patterns (such as bash `/dev/tcp` redirection and `nc -e`), downloads from bare IP addresses, base64-decoded payloads, and known offensive tools including nmap, netcat, socat, Hydra, Mimikatz and sqlmap at High severity. Dual-use tools that administrators also rely on, such as curl, wget, tcpdump and PowerShell, are flagged at Medium. Tool names are matched as whole program names against the command being run, not anywhere in the log line, so "nc" does not match "sync" and the tool john does not match a user called john. On Windows commands are taken from process creation events (Event ID 4688); on Linux from sudo commands, cron jobs and the message text of each log line.
 
 
 ## Windows Event IDs Monitored

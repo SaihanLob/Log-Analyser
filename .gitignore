@@ -1,0 +1,14 @@
+# Logs and reports can contain real usernames, IP addresses and hostnames.
+# Never commit them. Sanitised sample logs go in samples/, which is allowed below.
+*.log
+*.evtx
+report*.html
+!samples/
+!samples/**
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
