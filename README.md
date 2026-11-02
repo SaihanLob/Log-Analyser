@@ -21,7 +21,7 @@ This was built as a blue team and SOC learning project, with the goal of underst
 
 **Failed Logins and Brute Force**
 
-Flags every failed authentication attempt and groups them by user and source IP. If the number of failures from a single source exceeds the configured threshold within the time window, a brute force finding is raised at High severity.
+Flags every failed authentication attempt and groups them by source IP, so an attacker who cycles through many usernames (password spraying) is still caught. If the number of failures from a single source reaches the configured threshold within the time window, a brute force finding is raised at High severity, listing the usernames that were tried. If that same IP then logs in successfully, a separate Possible Compromise finding is raised at High severity, since a brute force followed by a successful login is the strongest sign that the attack worked.
 
 **Privilege Escalation**
 

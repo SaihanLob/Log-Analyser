@@ -110,7 +110,9 @@ class Finding:
 #  WINDOWS EVENT LOG PARSER
 
 
-def parse_evtx(filepath: str, logger: logging.Logger) -> list:
+def parse_evtx(filepath: str, logger: logging.Logger,
+               threshold: int = BRUTE_FORCE_THRESHOLD,
+               window: int = BRUTE_FORCE_WINDOW) -> list:
     if not EVTX_AVAILABLE:
         logger.error("python-evtx is not installed. Run: pip install python-evtx")
         return []
@@ -224,15 +226,15 @@ def parse_evtx(filepath: str, logger: logging.Logger) -> list:
     for key, timestamps in failed_logins.items():
         timestamps.sort()
         for i in range(len(timestamps)):
-            window = [t for t in timestamps[i:] if t and timestamps[i] and (t - timestamps[i]).total_seconds() <= BRUTE_FORCE_WINDOW]
-            if len(window) >= BRUTE_FORCE_THRESHOLD:
+            in_window = [t for t in timestamps[i:] if t and timestamps[i] and (t - timestamps[i]).total_seconds() <= window]
+            if len(in_window) >= threshold:
                 user, ip = key.rsplit("@", 1)
                 findings.append(Finding(
                     category    = "Brute Force",
                     severity    = "HIGH",
                     timestamp   = str(timestamps[i]),
                     source      = filepath,
-                    description = f"Brute force detected: {len(window)} failed logins for '{user}' from {ip} within {BRUTE_FORCE_WINDOW}s",
+                    description = f"Brute force detected: {len(in_window)} failed logins for '{user}' from {ip} within {window}s",
                 ))
                 break
 
@@ -248,10 +250,17 @@ def _parse_windows_ts(ts_str: str):
 #  LINUX SYSLOG PARSER
 
 
+# One "Failed ..." line is logged by sshd for every failed authentication attempt,
+# including attempts against accounts that do not exist ("for invalid user X").
+# The separate "Invalid user X from IP" and pam_unix "authentication failure" lines
+# describe the same attempt, so they are not counted to avoid double counting.
 SYSLOG_FAILED_LOGIN_RE = re.compile(
-    r"(?P<month>\w+)\s+(?P<day>\d+)\s+(?P<time>\d+:\d+:\d+).*"
-    r"(Failed password|authentication failure|Invalid user)\s*(for\s+(?P<user>\S+))?"
-    r"(\s+from\s+(?P<ip>[\d\.]+))?",
+    r"Failed (?:password|publickey|none) for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+)",
+    re.IGNORECASE
+)
+
+SYSLOG_ACCEPTED_LOGIN_RE = re.compile(
+    r"Accepted (?:password|publickey|keyboard-interactive\S*) for (?P<user>\S+) from (?P<ip>\S+)",
     re.IGNORECASE
 )
 
@@ -268,9 +277,12 @@ SYSLOG_SU_RE = re.compile(
 )
 
 
-def parse_syslog(filepath: str, logger: logging.Logger) -> list:
+def parse_syslog(filepath: str, logger: logging.Logger,
+                 threshold: int = BRUTE_FORCE_THRESHOLD,
+                 window: int = BRUTE_FORCE_WINDOW) -> list:
     findings  = []
-    failed_logins = defaultdict(list)
+    failed_logins   = defaultdict(list)   # source IP -> [(datetime, user, timestamp string)]
+    accepted_logins = []                  # [(datetime, user, ip, timestamp string)]
 
     logger.info(f"Parsing Linux syslog: {filepath}")
 
@@ -286,10 +298,11 @@ def parse_syslog(filepath: str, logger: logging.Logger) -> list:
                 # Failed login
                 m = SYSLOG_FAILED_LOGIN_RE.search(line)
                 if m:
-                    user = m.group("user") or "Unknown"
-                    ip   = m.group("ip")   or "Unknown"
-                    key  = f"{user}@{ip}"
-                    failed_logins[key].append((timestamp, line))
+                    user = m.group("user")
+                    ip   = m.group("ip")
+                    dt   = _parse_syslog_dt(timestamp)
+                    if dt:
+                        failed_logins[ip].append((dt, user, timestamp))
                     findings.append(Finding(
                         category    = "Failed Login",
                         severity    = "MEDIUM",
@@ -298,6 +311,14 @@ def parse_syslog(filepath: str, logger: logging.Logger) -> list:
                         description = f"Failed login for user '{user}' from {ip}",
                         raw         = line
                     ))
+                    continue
+
+                # Successful login: only reported later if it follows a brute force
+                m = SYSLOG_ACCEPTED_LOGIN_RE.search(line)
+                if m:
+                    dt = _parse_syslog_dt(timestamp)
+                    if dt:
+                        accepted_logins.append((dt, m.group("user"), m.group("ip"), timestamp))
                     continue
 
                 # Sudo usage
@@ -361,16 +382,43 @@ def parse_syslog(filepath: str, logger: logging.Logger) -> list:
     except PermissionError:
         logger.error(f"Permission denied reading: {filepath}")
 
-    # Brute force detection
-    for key, entries in failed_logins.items():
-        if len(entries) >= BRUTE_FORCE_THRESHOLD:
-            user, ip = key.rsplit("@", 1)
+    # Brute force detection.
+    # Failures are grouped by source IP rather than by user, so an attacker who
+    # tries many different usernames (password spraying) is still caught.
+    # A sliding window finds the busiest `window`-second period for each IP.
+    brute_force_ips = {}   # IP -> datetime the brute force began
+    for ip, attempts in failed_logins.items():
+        attempts.sort(key=lambda a: a[0])
+        start = best_start = best_count = 0
+        for end in range(len(attempts)):
+            while (attempts[end][0] - attempts[start][0]).total_seconds() > window:
+                start += 1
+            if end - start + 1 > best_count:
+                best_start, best_count = start, end - start + 1
+
+        if best_count >= threshold:
+            burst = attempts[best_start:best_start + best_count]
+            began = burst[0][0]
+            brute_force_ips[ip] = began
+            users = sorted({user for _, user, _ in burst})
+            user_list = ", ".join(users[:5]) + (f" and {len(users) - 5} more" if len(users) > 5 else "")
             findings.append(Finding(
                 category    = "Brute Force",
                 severity    = "HIGH",
-                timestamp   = entries[0][0],
+                timestamp   = burst[0][2],
                 source      = filepath,
-                description = f"Brute force detected: {len(entries)} failed logins for '{user}' from {ip}",
+                description = f"Brute force detected: {best_count} failed logins from {ip} within {window}s (users tried: {user_list})",
+            ))
+
+    # A successful login from an IP that was brute forcing suggests the attack worked
+    for dt, user, ip, timestamp in accepted_logins:
+        if ip in brute_force_ips and dt >= brute_force_ips[ip]:
+            findings.append(Finding(
+                category    = "Possible Compromise",
+                severity    = "HIGH",
+                timestamp   = timestamp,
+                source      = filepath,
+                description = f"Successful login for '{user}' from {ip} after a brute force from the same IP",
             ))
 
     return findings
@@ -379,6 +427,19 @@ def parse_syslog(filepath: str, logger: logging.Logger) -> list:
 def _extract_syslog_ts(line: str) -> str:
     m = re.match(r"(\w+\s+\d+\s+\d+:\d+:\d+)", line)
     return m.group(1) if m else "Unknown"
+
+
+def _parse_syslog_dt(ts: str):
+    """Convert a syslog timestamp such as 'Nov  1 07:15:00' into a datetime.
+
+    Classic syslog lines do not include the year, so the current year is assumed.
+    Only the gaps between events matter for brute force detection, so this is safe
+    except for logs that span New Year.
+    """
+    try:
+        return datetime.strptime(f"{datetime.now().year} {ts}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        return None
 
 #  HTML REPORT GENERATOR
 
@@ -541,11 +602,11 @@ Examples:
 
     if args.syslog:
         for path in args.syslog:
-            all_findings.extend(parse_syslog(path, logger))
+            all_findings.extend(parse_syslog(path, logger, args.threshold, args.window))
 
     if args.evtx:
         for path in args.evtx:
-            all_findings.extend(parse_evtx(path, logger))
+            all_findings.extend(parse_evtx(path, logger, args.threshold, args.window))
 
     # Summary
     high   = [f for f in all_findings if f.severity == "HIGH"]
